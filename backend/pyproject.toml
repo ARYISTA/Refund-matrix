@@ -1,0 +1,63 @@
+[project]
+name = "refund-matrix-backend"
+version = "0.0.1"
+description = "Refund Matrix: multi-agent payment refund system (backend)"
+requires-python = ">=3.12"
+# Later phases add FastAPI, LangGraph, etc.
+dependencies = [
+  "pydantic[email]>=2.7,<3",
+  "pydantic-settings>=2.3,<3",
+  "pyyaml>=6,<7",
+  "sqlalchemy>=2.0,<3",
+  "alembic>=1.13,<2",
+  "psycopg[binary]>=3.1,<4",
+  "pgvector>=0.3,<1",
+  "pypdf>=5,<7",
+  "langfuse>=3,<4",
+  # Phase 3: model wrappers and @tool only (no full `langchain`).
+  "langchain-core>=1,<2",
+  "langchain-groq>=1,<2",
+  # Phase 4: durable graph execution and Postgres checkpoints.
+  "langgraph>=1,<2",
+  "langgraph-checkpoint-postgres>=3,<4",
+  "fastapi>=0.115,<1",
+  "uvicorn[standard]>=0.30,<1",
+  "PyJWT>=2.9,<3",
+  "pwdlib[argon2]>=0.2,<1",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8",
+  "pytest-asyncio>=1,<2",
+  "ruff>=0.5",
+  "mypy>=1.10",
+  "types-PyYAML",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["app*", "migrations*"]
+
+[tool.setuptools.package-data]
+"app.policy" = ["policy.yaml"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+asyncio_mode = "auto"
+
+[tool.ruff]
+line-length = 110
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+plugins = ["pydantic.mypy"]

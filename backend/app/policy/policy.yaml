@@ -1,0 +1,9 @@
+# Single source of truth for refund limits. Validated by app/policy/config.py at startup.
+# The RAG ingest (Phase 5) generates its "Current limits" chunk from this file.
+version: "1.0.0"
+currency: INR
+auto_approve_below_paise: 500000     # strictly less than Rs 5,000
+return_window_days: 30
+eligible_reasons: [damaged, wrong_item, not_delivered, defective]
+max_refunds_per_customer_30d: 3
+escalate_at_or_above_threshold: true  # false => reject instead of escalate

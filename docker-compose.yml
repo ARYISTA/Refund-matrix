@@ -1,0 +1,24 @@
+services:
+  db:
+    # Postgres 16 with the pgvector extension. One database for app data, LangGraph
+    # checkpoints and KB vectors.
+    image: pgvector/pgvector:pg16
+    container_name: refund-matrix-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-refund}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env (copy .env.example)}
+      POSTGRES_DB: ${POSTGRES_DB:-refund_matrix}
+    ports:
+      # Bound to localhost only; the database is not exposed to the network.
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-refund} -d $${POSTGRES_DB:-refund_matrix}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  pgdata:
