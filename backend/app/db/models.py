@@ -199,6 +199,7 @@ class Order(Base):
     ordered_at: Mapped[datetime] = mapped_column(_now())
     delivered_at: Mapped[datetime | None] = mapped_column(_now())
     expected_delivery_at: Mapped[datetime | None] = mapped_column(_now())
+    return_received_at: Mapped[datetime | None] = mapped_column(_now(), nullable=True)
     total_paise: Mapped[int] = mapped_column(BigInteger)
     fraud_flag: Mapped[bool] = mapped_column(Boolean, server_default="false")
     created_at: Mapped[datetime] = mapped_column(_now(), server_default=func.now())

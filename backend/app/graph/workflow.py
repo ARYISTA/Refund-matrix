@@ -11,7 +11,7 @@ from collections.abc import AsyncIterator, Callable, Iterator
 from contextlib import AbstractContextManager, asynccontextmanager, contextmanager
 from datetime import UTC, datetime, timedelta
 from functools import partial
-from typing import Any, TypedDict
+from typing import Any, NotRequired, TypedDict
 from uuid import UUID, uuid4
 
 from langgraph.checkpoint.postgres import PostgresSaver
@@ -24,7 +24,7 @@ from sqlalchemy.orm import Session
 from app.config import get_policy
 from app.contracts.agents import RefundIntakeOutput, TriageOutput
 from app.contracts.decisions import PolicyResult
-from app.contracts.enums import CaseStatus, Intent, NodeName, NodeStatus, PolicyDecision, ReviewAction
+from app.contracts.enums import CaseStatus, Intent, NodeName, NodeStatus, PolicyDecision, ReasonCategory, ReviewAction
 from app.contracts.facts import RefundFacts
 from app.contracts.payout import PayoutResult
 from app.contracts.state import CaseState, ChatMessage, ReviewDecision
@@ -39,27 +39,27 @@ from app.policy.engine import evaluate_refund
 log = logging.getLogger(__name__)
 
 
-class GraphState(TypedDict, total=False):
+class GraphState(TypedDict):
     case_id: UUID
     thread_id: str
     customer_id: str
     messages: list[ChatMessage]
-    status: CaseStatus
-    current_node: NodeName | None
-    last_node_status: NodeStatus | None
-    triage: TriageOutput | None
-    intake: RefundIntakeOutput | None
-    facts: RefundFacts | None
-    policy_result: PolicyResult | None
-    review: ReviewDecision | None
-    payout: PayoutResult | None
-    resolution_text: str | None
-    reply: str | None
-    handoff_reason: str | None
-    policy_version: str | None
-    prompt_version: str | None
-    trace_id: str | None
-    created_at: datetime | None
+    status: NotRequired[CaseStatus]
+    current_node: NotRequired[NodeName | None]
+    last_node_status: NotRequired[NodeStatus | None]
+    triage: NotRequired[TriageOutput | None]
+    intake: NotRequired[RefundIntakeOutput | None]
+    facts: NotRequired[RefundFacts | None]
+    policy_result: NotRequired[PolicyResult | None]
+    review: NotRequired[ReviewDecision | None]
+    payout: NotRequired[PayoutResult | None]
+    resolution_text: NotRequired[str | None]
+    reply: NotRequired[str | None]
+    handoff_reason: NotRequired[str | None]
+    policy_version: NotRequired[str | None]
+    prompt_version: NotRequired[str | None]
+    trace_id: NotRequired[str | None]
+    created_at: NotRequired[datetime | None]
 
 
 SessionFactory = Callable[[], AbstractContextManager[Session]]
@@ -211,7 +211,7 @@ def load_facts(state: GraphState, *, deps: WorkflowDependencies) -> dict[str, An
         requesting_customer_id=state["customer_id"],
         order=order,
         refund_amount_paise=amount,
-        refunds_last_30d=int(recent),
+        refunds_last_30d=recent,
         as_of=deps.now(),
     )
     return {**result, **_completed(deps, state, NodeName.LOAD_FACTS), "facts": facts}
@@ -241,11 +241,22 @@ def policy_check(state: GraphState, *, deps: WorkflowDependencies) -> dict[str, 
             case.reason_category = intake.reason_category.value
             case.decision_type = output.decision.value
             session.commit()
-    status = {
-        PolicyDecision.REJECT: CaseStatus.REJECTED,
-        PolicyDecision.ESCALATE: CaseStatus.PENDING_APPROVAL,
-        PolicyDecision.AUTO_APPROVE: CaseStatus.OPEN,
-    }[output.decision]
+    order = facts.order
+    awaiting_return = (
+        output.decision is PolicyDecision.AUTO_APPROVE
+        and order is not None
+        and order.delivered_at is not None
+        and intake.reason_category in (ReasonCategory.DAMAGED, ReasonCategory.WRONG_ITEM, ReasonCategory.DEFECTIVE)
+        and order.return_received_at is None
+    )
+    if awaiting_return:
+        status = CaseStatus.PENDING_APPROVAL
+    else:
+        status = {
+            PolicyDecision.REJECT: CaseStatus.REJECTED,
+            PolicyDecision.ESCALATE: CaseStatus.PENDING_APPROVAL,
+            PolicyDecision.AUTO_APPROVE: CaseStatus.OPEN,
+        }[output.decision]
     return {
         **result,
         **_completed(
@@ -265,7 +276,7 @@ def route_after_policy(state: GraphState) -> str:
     result = state.get("policy_result")
     if result is None or result.decision is PolicyDecision.REJECT:
         return "responder"
-    if result.decision is PolicyDecision.ESCALATE:
+    if result.decision is PolicyDecision.ESCALATE or state.get("status") is CaseStatus.PENDING_APPROVAL:
         return "human_review"
     return "payout"
 
@@ -333,7 +344,11 @@ async def resolution(state: GraphState, *, deps: WorkflowDependencies) -> dict[s
         else:
             result = await deps.provider.run_tools(
                 role=ModelRole.AGENT,
-                system="Answer the customer's question. Use the supplied read-only order tool when needed.",
+                system=(
+                    "Answer the customer's question. Use the search_policy tool to look up verified company and Amazon "
+                    "refund rules, timelines, return procedures, and FAQs. Use lookup_order_status for specific order information. "
+                    "Always base your answers strictly on the verified tool observations."
+                ),
                 tools=tools_for(NodeName.RESOLUTION, deps.tool_context),
                 untrusted_text=state["messages"][-1].content,
                 task="Resolve the customer's question.",
@@ -363,8 +378,16 @@ async def responder(state: GraphState, *, deps: WorkflowDependencies) -> dict[st
         text = "Your refund request has been approved and the payment has been processed."
     elif state.get("status") is CaseStatus.DENIED and review and review.action.value == "deny":
         text = "Your refund request was reviewed and denied by a manager."
+    elif state.get("status") is CaseStatus.PENDING_APPROVAL:
+        intake_res = state.get("intake")
+        order_id = intake_res.order_id if intake_res else "your order"
+        text = (
+            f"Your refund request for {order_id} has been registered. As per Amazon refund policy, "
+            "refunds are processed once the returned package is received by our facility. "
+            "Our review team will verify the package receipt and initiate the refund."
+        )
     elif state.get("resolution_text"):
-        text = str(state["resolution_text"])
+        text = str(state.get("resolution_text"))
     else:
         try:
             text = await deps.provider.generate_text(
@@ -395,6 +418,7 @@ async def responder(state: GraphState, *, deps: WorkflowDependencies) -> dict[st
     }
 
 
+# pyrefly: ignore[deprecated]
 @contextmanager
 def make_postgres_checkpointer(connection_string: str) -> Iterator[PostgresSaver]:
     """Open and set up a durable Postgres checkpoint store for a graph lifetime."""
@@ -405,6 +429,7 @@ def make_postgres_checkpointer(connection_string: str) -> Iterator[PostgresSaver
         yield checkpointer
 
 
+# pyrefly: ignore[deprecated]
 @asynccontextmanager
 async def make_async_postgres_checkpointer(
     connection_string: str,
@@ -417,6 +442,7 @@ async def make_async_postgres_checkpointer(
 
 
 def build_graph(deps: WorkflowDependencies, *, checkpointer: Any | None = None) -> Any:
+    # pyrefly: ignore[bad-specialization]
     builder = StateGraph(GraphState)
     builder.add_node("triage", partial(triage, deps=deps))
     builder.add_node("refund_intake", partial(refund_intake, deps=deps))

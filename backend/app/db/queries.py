@@ -38,6 +38,7 @@ def get_order_facts(session: Session, order_id: str, customer_id: str) -> OrderF
         ordered_at=order.ordered_at,
         delivered_at=order.delivered_at,
         expected_delivery_at=order.expected_delivery_at,
+        return_received_at=order.return_received_at,
         total_paise=order.total_paise,
         refunded_paise=int(refunded),
         items=tuple(

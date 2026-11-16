@@ -27,6 +27,8 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app.config import get_policy, get_settings
+from app.rag.embeddings import HashEmbeddingProvider
+from app.rag.ingest import ingest_knowledge
 from app.contracts.enums import PaymentStatus, ReasonCategory
 from app.db.models import (
     AuditEvent,
@@ -212,6 +214,7 @@ def build_seed(now: datetime | None = None) -> SeedData:
                 customer_id=customer_id,
                 ordered_at=ago(ordered),
                 delivered_at=ago(delivered) if delivered is not None else None,
+                return_received_at=ago(1) if delivered is not None else None,
                 total_paise=total,
                 fraud_flag=fraud,
             )
@@ -324,6 +327,7 @@ def build_company_seed(session: Session, now: datetime) -> SeedData:
         lines = order["items"]
         subtotal = sum(line["qty"] * line["unit_price_paise"] for line in lines)
         total = subtotal + order.get("shipping_paise", 0)
+        return_received_days = order.get("return_received_days_ago")
         orders.append(
             Order(
                 id=order["id"],
@@ -332,6 +336,9 @@ def build_company_seed(session: Session, now: datetime) -> SeedData:
                 delivered_at=relative_days(order["delivered_days_ago"]),
                 expected_delivery_at=relative_days(
                     order.get("expected_delivery_days_from_now"), future=True
+                ),
+                return_received_at=relative_days(return_received_days) if return_received_days is not None else (
+                    relative_days(1) if order.get("delivered_days_ago") and order["id"] in ("ORD-1001", "ORD-1002", "ORD-1005") else None
                 ),
                 total_paise=total,
             )
@@ -443,6 +450,18 @@ def main() -> None:
         if args.reset:
             reset_tables(session)
         added = seed(session, company_fixture=args.company_fixture)
+        policy_path = Path(__file__).resolve().parents[1] / "policy" / "policy.yaml"
+        docs_path = Path(__file__).resolve().parents[3] / "docs" / "knowledge"
+        try:
+            ingest_res = ingest_knowledge(
+                session,
+                policy_path=policy_path,
+                documents_path=docs_path if docs_path.exists() else None,
+                embedder=HashEmbeddingProvider(settings.embedding_dim),
+            )
+            log.info("ingested knowledge documents", extra={"count": len(ingest_res)})
+        except Exception as e:
+            log.warning("knowledge ingestion skipped: %s", e)
     log.info(
         "seed complete",
         extra={"rows_added": added, "reset": args.reset, "company_fixture": args.company_fixture},

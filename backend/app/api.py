@@ -6,7 +6,9 @@ import logging
 import time
 from collections import defaultdict
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
+from pathlib import Path
 from threading import Lock
 from typing import Any
 from uuid import UUID, uuid4
@@ -39,11 +41,13 @@ from app.contracts.api import (
     UserOut,
 )
 from app.contracts.enums import CaseStatus, UserRole
+from app.contracts.payout import PayoutResult
 from app.contracts.state import CaseState, ChatMessage, ReviewDecision
 from app.db.models import (
     AuditEvent,
     Case,
     Customer,
+    KnowledgeChunk,
     Order,
     Payout,
     PolicySetting,
@@ -58,7 +62,7 @@ from app.graph import (
 )
 from app.llm import get_provider
 from app.llm.tools import ToolContext
-from app.rag import HashEmbeddingProvider, upsert_current_limits
+from app.rag import HashEmbeddingProvider, ingest_knowledge, upsert_current_limits
 from app.security import create_access_token, current_user, require_role, verify_password
 
 log = logging.getLogger(__name__)
@@ -83,7 +87,34 @@ class RateLimiter:
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or get_settings()
-    app = FastAPI(title="Refund Matrix API", docs_url="/docs" if settings.app_env != "production" else None)
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        try:
+            with app.state.session_factory() as session:
+                count = session.scalar(select(func.count(KnowledgeChunk.id)))
+                if not count:
+                    policy_path = Path("backend/app/policy/policy.yaml")
+                    if not policy_path.exists():
+                        policy_path = Path("app/policy/policy.yaml")
+                    docs_path = Path("docs/knowledge")
+                    if not docs_path.exists():
+                        docs_path = Path("../docs/knowledge")
+                    ingest_knowledge(
+                        session,
+                        policy_path=policy_path,
+                        documents_path=docs_path if docs_path.exists() else None,
+                        embedder=HashEmbeddingProvider(settings.embedding_dim),
+                    )
+        except Exception as e:
+            log.warning("Initial RAG ingestion check: %s", e)
+        yield
+
+    app = FastAPI(
+        title="Refund Matrix API",
+        docs_url="/docs" if settings.app_env != "production" else None,
+        lifespan=lifespan,
+    )
     app.state.session_factory = sessionmaker(
         create_engine(runtime_database_url(settings)), expire_on_commit=False
     )
@@ -486,6 +517,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             ):
                 chat_messages.append(ChatMessage(role="assistant", content=effective_reply))
 
+            payout_row = session.scalar(select(Payout).where(Payout.case_id == case.id))
+            payout_data = None
+            if payout_row:
+                payout_data = PayoutResult(
+                    payout_id=payout_row.payout_id,
+                    utr=payout_row.utr,
+                    amount_paise=payout_row.amount_paise,
+                    currency="INR",
+                    idempotency_key=payout_row.idempotency_key,
+                    account_masked=payout_row.account_masked,
+                    created_at=payout_row.created_at,
+                )
+            elif state.payout:
+                payout_data = state.payout
+
             return CustomerCaseOut(
                 id=UUID(case.id),
                 thread_id=case.thread_id,
@@ -497,6 +543,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 order_id=order_id,
                 amount_paise=amount_paise,
                 policy_result=state.policy_result,
+                payout=payout_data,
                 timeline=timeline,
                 reason=reason,
             )
@@ -525,6 +572,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         order_id=o.id,
                         ordered_at=o.ordered_at,
                         delivered_at=o.delivered_at,
+                        return_received_at=o.return_received_at,
                         total_paise=o.total_paise,
                         payment_status=payment_status,
                         items=[

@@ -34,6 +34,7 @@ class OrderFacts(BaseModel):
     ordered_at: AwareDatetime
     delivered_at: AwareDatetime | None = None
     expected_delivery_at: AwareDatetime | None = None
+    return_received_at: AwareDatetime | None = None
     total_paise: PositivePaise
     refunded_paise: Paise  # sum of refunds already paid or approved for this order
     items: tuple[OrderItem, ...]
