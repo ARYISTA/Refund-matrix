@@ -27,6 +27,8 @@ from app.contracts.agents import OrderId
 from app.contracts.enums import NodeName, PaymentStatus
 from app.contracts.facts import OrderFacts
 from app.db.queries import get_order_facts
+from app.rag.embeddings import HashEmbeddingProvider
+from app.rag.retrieve import hybrid_search
 
 NOT_FOUND_MESSAGE = "We couldn't find that order on your account."  # same wording as the policy engine
 
@@ -107,9 +109,47 @@ def make_lookup_order_status(ctx: ToolContext) -> BaseTool:
     )
 
 
-# search_policy (RAG) joins the resolution agent's list in Phase 5.
+class SearchPolicyArgs(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    query: str = Field(
+        description="The customer's question or search terms about the refund policy, return conditions, refund timelines, payment methods (bank account, Amazon Pay, NEFT), or FAQs."
+    )
+
+
+def make_search_policy(ctx: ToolContext) -> BaseTool:
+    def search_policy(query: str) -> str:
+        with ctx.session_factory() as session:
+            chunks = hybrid_search(
+                session,
+                query=query,
+                embedder=HashEmbeddingProvider(384),
+                top_k=4,
+                min_similarity=0.2,
+            )
+        if not chunks:
+            return "No specific policy sections matched the query."
+        return "\n\n---\n\n".join(f"[Source: {c.source_path}]\n{c.content}" for c in chunks)
+
+    return StructuredTool.from_function(
+        func=search_policy,
+        name="search_policy",
+        description=(
+            "Search the company and Amazon refund policy, return requirements (e.g. return package receipt), "
+            "refund timelines by payment method (Amazon Pay, Credit/Debit Card, Net Banking, UPI, NEFT), "
+            "and FAQs. Returns verified knowledge chunks."
+        ),
+        args_schema=SearchPolicyArgs,
+        metadata={"read_only": True},
+    )
+
+
+# search_policy (RAG) joins the resolution agent's list.
 _TOOL_FACTORIES: Mapping[str, Callable[[ToolContext], BaseTool]] = MappingProxyType(
-    {"lookup_order_status": make_lookup_order_status}
+    {
+        "lookup_order_status": make_lookup_order_status,
+        "search_policy": make_search_policy,
+    }
 )
 
 TOOL_ALLOWLIST: Mapping[NodeName, frozenset[str]] = MappingProxyType(
@@ -117,7 +157,7 @@ TOOL_ALLOWLIST: Mapping[NodeName, frozenset[str]] = MappingProxyType(
         NodeName.TRIAGE: frozenset(),
         NodeName.REFUND_INTAKE: frozenset(),
         NodeName.RESPONDER: frozenset(),
-        NodeName.RESOLUTION: frozenset({"lookup_order_status"}),
+        NodeName.RESOLUTION: frozenset({"lookup_order_status", "search_policy"}),
     }
 )
 

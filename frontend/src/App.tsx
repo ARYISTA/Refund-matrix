@@ -646,9 +646,16 @@ function ClaudeChat({
               </button>
               <button
                 className="welcome-pill-btn"
-                onClick={() => handleSubmit("What is your refund policy window and return criteria?")}
+                onClick={() => handleSubmit("What are the refund timelines according to Amazon policy for UPI, credit cards, and bank transfer?")}
               >
-                <span>⏱️ What is the refund policy window?</span>
+                <span>📜 Amazon Policy: What are the refund timelines across payment modes?</span>
+                <span>→</span>
+              </button>
+              <button
+                className="welcome-pill-btn"
+                onClick={() => handleSubmit("Does the Amazon policy require returning the physical item before refund is initiated?")}
+              >
+                <span>📦 Amazon Policy: When is the refund initiated for returned packages?</span>
                 <span>→</span>
               </button>
               <button
@@ -892,31 +899,166 @@ function ClaudePipelinePanel({
             </div>
           )}
 
-          {/* 6. Dispatched Payout */}
-          {"payout" in caseData && caseData.payout && (
-            <div className="active-order-card" style={{ marginTop: "16px" }}>
-              <div className="active-order-header">
-                <span className="active-order-id">Dispatched Payout</span>
-                <StatusBadge status="paid" />
-              </div>
-              <div className="order-item-row">
-                <span>UTR Number:</span>
-                <code>{caseData.payout.utr}</code>
-              </div>
-              <div className="order-item-row">
-                <span>Amount:</span>
-                <strong>{formatMoney(caseData.payout.amount_paise)}</strong>
-              </div>
-              <div className="order-item-row">
-                <span>Masked Account:</span>
-                <span>{caseData.payout.account_masked}</span>
-              </div>
-            </div>
-          )}
+          {/* 6. Mock Payment Tracker & Settlement Rail */}
+          <MockPaymentTracker caseData={caseData} linkedOrder={linkedOrder} />
         </>
       )}
     </aside>
   );
+}
+
+/* =========================================================
+   MOCK PAYMENT TRACKER & ISSUER COMPONENT
+   ========================================================= */
+function MockPaymentTracker({
+  caseData,
+  linkedOrder,
+}: {
+  caseData: Case | CustomerCase;
+  linkedOrder?: CustomerOrder | null;
+}) {
+  const payout = "payout" in caseData ? caseData.payout : null;
+  const isPaid = caseData.status === "paid" || caseData.status === "processed";
+  const isUnderReview = caseData.status === "under_review" || caseData.status === "pending_approval";
+  const returnReceived = Boolean(linkedOrder?.return_received_at);
+
+  if (payout) {
+    return (
+      <div className="payment-tracker-card settled">
+        <div className="payment-tracker-header">
+          <div className="tracker-badge-group">
+            <span className="live-pulse-dot" />
+            <span className="tracker-title">Mock Payment Issuer & Settlement Rail</span>
+          </div>
+          <StatusBadge status="paid" />
+        </div>
+
+        <div className="tracker-amount-box">
+          <span className="tracker-amount-label">Dispatched Refund Amount</span>
+          <div className="tracker-amount-val">{formatMoney(payout.amount_paise)}</div>
+          <span className="tracker-gateway-tag">Instant Autonomous Direct Credit (Simulated IMPS/NEFT Rail)</span>
+        </div>
+
+        <div className="tracker-details-grid">
+          <div className="tracker-detail-cell">
+            <span className="cell-label">Beneficiary Account</span>
+            <span className="cell-val"><code>{payout.account_masked}</code></span>
+          </div>
+          <div className="tracker-detail-cell">
+            <span className="cell-label">Bank Reference / UTR</span>
+            <span className="cell-val"><code>{payout.utr}</code></span>
+          </div>
+          <div className="tracker-detail-cell">
+            <span className="cell-label">Settlement Mode</span>
+            <span className="cell-val">IMPS / NetBanking</span>
+          </div>
+          <div className="tracker-detail-cell">
+            <span className="cell-label">Dispatched Time</span>
+            <span className="cell-val">{formatRelativeTime(payout.created_at)}</span>
+          </div>
+        </div>
+
+        {/* 4-Step Settlement Lifecycle */}
+        <div className="tracker-stepper">
+          <div className="stepper-step completed">
+            <div className="stepper-dot">✓</div>
+            <div className="stepper-labels">
+              <strong>1. Claim Registered & Triaged</strong>
+              <span>Deterministic policy verified</span>
+            </div>
+          </div>
+          <div className="stepper-step completed">
+            <div className="stepper-dot">✓</div>
+            <div className="stepper-labels">
+              <strong>2. Return Item Received at Facility</strong>
+              <span>Verified package return</span>
+            </div>
+          </div>
+          <div className="stepper-step completed">
+            <div className="stepper-dot">✓</div>
+            <div className="stepper-labels">
+              <strong>3. Approval & Issuer Authorization</strong>
+              <span>Sign-off validated</span>
+            </div>
+          </div>
+          <div className="stepper-step completed live">
+            <div className="stepper-dot">₹</div>
+            <div className="stepper-labels">
+              <strong>4. Funds Dispatched to Account</strong>
+              <span>Direct bank credit acknowledged</span>
+            </div>
+          </div>
+        </div>
+
+        {/* Amazon Refund Timelines Callout */}
+        <div className="amazon-policy-callout">
+          <div className="callout-header">
+            <span>📜 Amazon Refund Policy Timelines</span>
+          </div>
+          <div className="callout-grid">
+            <div><span>UPI / IMPS:</span> <strong>2 - 4 Business Hours</strong></div>
+            <div><span>Debit/Credit Card:</span> <strong>2 - 4 Business Days</strong></div>
+            <div><span>NEFT / NetBanking:</span> <strong>2 - 5 Business Days</strong></div>
+            <div><span>Amazon Pay Balance:</span> <strong>Instant (2 Hours)</strong></div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (isUnderReview) {
+    return (
+      <div className="payment-tracker-card awaiting">
+        <div className="payment-tracker-header">
+          <div className="tracker-badge-group">
+            <span className="live-pulse-dot pending" />
+            <span className="tracker-title">Payment Settlement Tracker</span>
+          </div>
+          <StatusBadge status="under_review" />
+        </div>
+
+        <div className="tracker-stepper">
+          <div className="stepper-step completed">
+            <div className="stepper-dot">✓</div>
+            <div className="stepper-labels">
+              <strong>1. Refund Claim Lodged</strong>
+              <span>Inquiry registered</span>
+            </div>
+          </div>
+          <div className={`stepper-step ${returnReceived ? "completed" : "active"}`}>
+            <div className="stepper-dot">{returnReceived ? "✓" : "📦"}</div>
+            <div className="stepper-labels">
+              <strong>2. Physical Return Package Receipt</strong>
+              <span>{returnReceived ? "Item received at fulfillment center" : "Awaiting return package arrival"}</span>
+            </div>
+          </div>
+          <div className="stepper-step">
+            <div className="stepper-dot">⏳</div>
+            <div className="stepper-labels">
+              <strong>3. Manager / Policy Sign-off</strong>
+              <span>Verification checkpoint</span>
+            </div>
+          </div>
+          <div className="stepper-step">
+            <div className="stepper-dot">₹</div>
+            <div className="stepper-labels">
+              <strong>4. Mock Issuer Bank Disbursal</strong>
+              <span>Pending release to bank account</span>
+            </div>
+          </div>
+        </div>
+
+        <div className="amazon-policy-notice">
+          <strong>Amazon Returns Policy (Section 1.2):</strong>
+          <p>
+            Refunds for delivered items are initiated only after the returned package is received and verified by Amazon/seller fulfillment. Once confirmed, payout is dispatched instantly to your registered bank account.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  return null;
 }
 
 /* =========================================================
@@ -934,7 +1076,7 @@ function OrdersView({
       <div className="eyebrow">Purchases & Deliveries</div>
       <h1>My Orders</h1>
       <p className="lede">
-        Select any delivered order below to initiate an autonomous refund claim.
+        Select any delivered order below to initiate an autonomous refund claim. Return status reflects physical package check-in per Amazon policy.
       </p>
 
       <div className="orders-grid">
@@ -951,6 +1093,19 @@ function OrdersView({
                 </div>
               ))}
             </div>
+
+            <div className="order-return-status-badge">
+              {o.return_received_at ? (
+                <span className="return-status-tag received">
+                  ✓ Returned Package Received at Facility
+                </span>
+              ) : (
+                <span className="return-status-tag pending">
+                  📦 Package with Customer (Amazon return required)
+                </span>
+              )}
+            </div>
+
             <div className="order-card-footer">
               <span className={`status ${o.payment_status}`}>{o.payment_status}</span>
               {o.can_refund ? (

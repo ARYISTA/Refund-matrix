@@ -155,6 +155,7 @@ class CustomerCaseOut(_Response):
     order_id: str | None = None
     amount_paise: Paise | None = None
     policy_result: PolicyResult | None = None
+    payout: PayoutResult | None = None
     timeline: list[TimelineStep] = Field(default_factory=list)
     reason: str | None = None
 
@@ -253,6 +254,7 @@ class CustomerOrderOut(_Response):
     order_id: str
     ordered_at: AwareDatetime
     delivered_at: AwareDatetime | None = None
+    return_received_at: AwareDatetime | None = None
     total_paise: Paise
     payment_status: str
     items: list[CustomerOrderItemOut]

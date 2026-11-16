@@ -79,6 +79,7 @@ export interface CustomerCase {
   order_id?: string | null;
   amount_paise?: number | null;
   policy_result?: PolicyResult | null;
+  payout?: Payout | null;
   timeline?: TimelineStep[];
   reason?: string | null;
 }
@@ -131,6 +132,7 @@ export interface CustomerOrder {
   order_id: string;
   ordered_at: string;
   delivered_at: string | null;
+  return_received_at?: string | null;
   total_paise: number;
   payment_status: string;
   items: CustomerOrderItem[];
